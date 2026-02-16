@@ -1,0 +1,8 @@
+# Dependencies
+node_modules/
+
+# Build output (committed only in the dedicated repo via sync script)
+dist/
+
+# TypeScript build info
+*.tsbuildinfo

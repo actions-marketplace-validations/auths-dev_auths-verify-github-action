@@ -1,0 +1,53 @@
+name: 'Auths Verify Commits'
+description: 'Verify commit signatures using Auths identity keys'
+author: 'auths'
+
+inputs:
+  allowed-signers:
+    description: 'Path to allowed_signers file'
+    required: false
+    default: '.auths/allowed_signers'
+  identity-bundle:
+    description: 'Path to identity bundle JSON file (alternative to allowed-signers)'
+    required: false
+    default: ''
+  identity-bundle-json:
+    description: 'Raw identity bundle JSON content (written to temp file automatically)'
+    required: false
+    default: ''
+  commit-range:
+    description: 'Git commit range to verify (defaults to PR commits or push commits)'
+    required: false
+    default: ''
+  auths-version:
+    description: 'Auths CLI version to use (leave empty for latest)'
+    required: false
+    default: ''
+  fail-on-unsigned:
+    description: 'Whether to fail the action if unsigned commits are found'
+    required: false
+    default: 'true'
+  skip-merge-commits:
+    description: 'Whether to skip merge commits during verification'
+    required: false
+    default: 'true'
+
+outputs:
+  verified:
+    description: 'Whether all commits were verified successfully'
+  results:
+    description: 'JSON array of per-commit verification results'
+  total:
+    description: 'Total number of commits checked'
+  passed:
+    description: 'Number of commits that passed verification'
+  failed:
+    description: 'Number of commits that failed verification'
+
+runs:
+  using: 'node20'
+  main: 'dist/index.js'
+
+branding:
+  icon: 'shield'
+  color: 'green'
