@@ -4,7 +4,7 @@ import * as github from '@actions/github';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { verifyCommits, VerifyOptions, VerificationResult, runPreflightChecks } from './verifier';
+import { verifyCommits, VerifyOptions, VerificationResult, FailureType, runPreflightChecks } from './verifier';
 
 async function run(): Promise<void> {
   let tempBundlePath = '';
@@ -100,15 +100,32 @@ async function run(): Promise<void> {
     // Write GitHub Step Summary
     await writeStepSummary(results, passed, skipped, failed, total);
 
-    // Enhanced failure message when all commits are unsigned
-    if (failed > 0 && failed === total - skipped) {
-      core.warning(
-        'No signed commits found. To sign commits with auths:\n' +
-        '1. Install: cargo install auths-cli\n' +
-        '2. Set up: auths setup\n' +
-        '3. Sign: git commit -S\n' +
-        'Docs: https://github.com/bordumb/auths#readme'
-      );
+    // Per-failure-type guidance whenever any commit fails
+    if (failed > 0) {
+      const failedResults = results.filter(r => !r.valid);
+      // Determine dominant failure type (most common)
+      const typeCounts: Record<string, number> = {};
+      for (const r of failedResults) {
+        const t = r.failureType ?? 'error';
+        typeCounts[t] = (typeCounts[t] ?? 0) + 1;
+      }
+      const dominantType = (Object.entries(typeCounts).sort((a, b) => b[1] - a[1])[0][0]) as FailureType;
+      const firstFailed = failedResults[0];
+      core.warning(fixMessageForType(dominantType, firstFailed.commit, failed));
+    }
+
+    // Opt-in PR comment
+    const postPrComment = core.getInput('post-pr-comment') === 'true';
+    if (postPrComment && github.context.eventName === 'pull_request') {
+      const token = core.getInput('github-token', { required: true });
+      const octokit = github.getOctokit(token);
+      const prNumber = github.context.payload.pull_request!.number;
+      const commentBody = buildPrCommentBody(results, passed, skipped, failed, total);
+      await octokit.rest.issues.createComment({
+        ...github.context.repo,
+        issue_number: prNumber,
+        body: commentBody,
+      });
     }
 
     // Fail if required
@@ -130,19 +147,55 @@ async function run(): Promise<void> {
 }
 
 /**
+ * Return a human-readable fix message for the dominant failure type.
+ */
+function fixMessageForType(type: FailureType, commit: string, failedCount: number): string {
+  const plural = failedCount > 1;
+  const amendCmd = plural
+    ? `git rebase HEAD~${failedCount} --exec 'git commit --amend --no-edit -S'\ngit push --force-with-lease`
+    : `git commit --amend --no-edit -S\ngit push --force-with-lease`;
+
+  switch (type) {
+    case 'unsigned':
+      return [
+        `Commit ${commit.slice(0, 8)} is not signed.`,
+        ``,
+        `Install auths:`,
+        `  macOS:  brew install auths`,
+        `  Linux:  See https://github.com/bordumb/auths/releases/latest`,
+        ``,
+        `Then re-sign and push:`,
+        `  ${amendCmd}`,
+        ``,
+        `Quickstart: https://github.com/bordumb/auths#quickstart`,
+      ].join('\n');
+
+    case 'unknown_signer':
+      return [
+        `Commit ${commit.slice(0, 8)} is signed but the key is not in the allowed signers.`,
+        `Ask a maintainer to add your public key, or check your allowed-signers file.`,
+        ``,
+        `Export your public key:  auths key export --format pub`,
+      ].join('\n');
+
+    case 'invalid_signature':
+      return `Commit ${commit.slice(0, 8)} has a corrupted or invalid signature. Re-sign it:\n  ${amendCmd}`;
+
+    default:
+      return `Commit ${commit.slice(0, 8)} failed verification. See details above.`;
+  }
+}
+
+/**
  * Write a Markdown summary to $GITHUB_STEP_SUMMARY
  */
-async function writeStepSummary(
+function buildSummaryMarkdown(
   results: VerificationResult[],
   passed: number,
   skipped: number,
   failed: number,
   total: number
-): Promise<void> {
-  if (results.length === 0) {
-    return;
-  }
-
+): string {
   const lines: string[] = [];
   lines.push('## Auths Commit Verification');
   lines.push('');
@@ -165,14 +218,91 @@ async function writeStepSummary(
 
   lines.push('');
   const resultEmoji = failed === 0 ? '\u2705' : '\u274c';
-  lines.push(`**Result:** ${resultEmoji} ${passed}/${total} commits verified`);
+  let resultLine = `**Result:** ${resultEmoji} ${passed}/${total} commits verified`;
   if (skipped > 0) {
-    lines.push(` (${skipped} skipped)`);
+    resultLine += ` (${skipped} skipped)`;
   }
+  lines.push(resultLine);
   lines.push('');
 
-  const summary = lines.join('\n');
+  if (failed > 0) {
+    const failedResults = results.filter(r => !r.valid);
+    const typeCounts: Record<string, number> = {};
+    for (const r of failedResults) {
+      const t = r.failureType ?? 'error';
+      typeCounts[t] = (typeCounts[t] ?? 0) + 1;
+    }
+    const dominantType = (Object.entries(typeCounts).sort((a, b) => b[1] - a[1])[0][0]) as FailureType;
+    const firstFailed = failedResults[0];
+    const plural = failed > 1;
+    const amendCmd = plural
+      ? `git rebase HEAD~${failed} --exec 'git commit --amend --no-edit -S'\ngit push --force-with-lease`
+      : `git commit --amend --no-edit -S\ngit push --force-with-lease`;
+
+    lines.push('---');
+    lines.push('### How to fix');
+    lines.push('');
+
+    switch (dominantType) {
+      case 'unsigned':
+        lines.push(`Commit \`${firstFailed.commit.slice(0, 8)}\` is not signed. Install auths and re-sign:`);
+        lines.push('');
+        lines.push('**macOS:** `brew install auths`');
+        lines.push('**Linux:** Download from [releases](https://github.com/bordumb/auths/releases/latest)');
+        lines.push('');
+        lines.push('Then re-sign:');
+        lines.push('```');
+        lines.push(amendCmd);
+        lines.push('```');
+        lines.push('');
+        lines.push('[Quickstart →](https://github.com/bordumb/auths#quickstart)');
+        break;
+      case 'unknown_signer':
+        lines.push(`Commit \`${firstFailed.commit.slice(0, 8)}\` is signed but the key is not in the allowed signers.`);
+        lines.push('Ask a maintainer to add your public key, or check your allowed-signers file.');
+        lines.push('');
+        lines.push('Export your public key:');
+        lines.push('```');
+        lines.push('auths key export --format pub');
+        lines.push('```');
+        break;
+      case 'invalid_signature':
+        lines.push(`Commit \`${firstFailed.commit.slice(0, 8)}\` has a corrupted or invalid signature. Re-sign it:`);
+        lines.push('```');
+        lines.push(amendCmd);
+        lines.push('```');
+        break;
+      default:
+        lines.push(`Commit \`${firstFailed.commit.slice(0, 8)}\` failed verification. See the Actions log for details.`);
+    }
+    lines.push('');
+  }
+
+  return lines.join('\n');
+}
+
+async function writeStepSummary(
+  results: VerificationResult[],
+  passed: number,
+  skipped: number,
+  failed: number,
+  total: number
+): Promise<void> {
+  if (results.length === 0) {
+    return;
+  }
+  const summary = buildSummaryMarkdown(results, passed, skipped, failed, total);
   await core.summary.addRaw(summary).write();
+}
+
+function buildPrCommentBody(
+  results: VerificationResult[],
+  passed: number,
+  skipped: number,
+  failed: number,
+  total: number
+): string {
+  return buildSummaryMarkdown(results, passed, skipped, failed, total);
 }
 
 /**
