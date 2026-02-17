@@ -22,7 +22,9 @@ That's it. The action auto-detects the commit range from the GitHub event (PR or
 - Downloads and caches the `auths` CLI automatically (with SHA256 checksum verification)
 - Skips merge commits by default
 - Gracefully handles GPG-signed commits (skips rather than fails)
-- Generates a GitHub Step Summary with per-commit results table
+- Generates a GitHub Step Summary with per-commit results table and a **"How to fix"** section when verification fails
+- Classifies failures (unsigned, unknown key, corrupted signature) with copy-pasteable fix commands
+- Optionally posts results directly to the PR as a comment (`post-pr-comment: true`)
 - Pre-flight checks: detects shallow clones and missing `ssh-keygen`
 
 ## Inputs
@@ -36,6 +38,8 @@ That's it. The action auto-detects the commit range from the GitHub event (PR or
 | `auths-version` | Auths CLI version to use (e.g. `0.5.0`) | No | `''` (latest) |
 | `fail-on-unsigned` | Whether to fail the action if unsigned commits are found | No | `true` |
 | `skip-merge-commits` | Whether to skip merge commits during verification | No | `true` |
+| `post-pr-comment` | Post a PR comment with results and fix instructions (requires `pull-requests: write`) | No | `false` |
+| `github-token` | GitHub token for posting the PR comment (required when `post-pr-comment: true`) | No | `''` |
 
 > **Note:** `allowed-signers` and `identity-bundle`/`identity-bundle-json` are mutually exclusive. Use one verification mode or the other.
 
@@ -144,6 +148,29 @@ jobs:
     fail-on-unsigned: 'false'
 ```
 
+### PR Comment with Fix Instructions
+
+Post results (and a "How to fix" section) directly on the PR where contributors actually look:
+
+```yaml
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: bordumb/auths-verify-action@v1
+        with:
+          allowed-signers: '.auths/allowed_signers'
+          post-pr-comment: 'true'
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+```
+
 ### Using Outputs
 
 ```yaml
@@ -154,17 +181,9 @@ jobs:
     allowed-signers: '.auths/allowed_signers'
     fail-on-unsigned: 'false'
 
-- name: Comment on PR
-  if: steps.verify.outputs.verified == 'false'
-  uses: actions/github-script@v7
-  with:
-    script: |
-      github.rest.issues.createComment({
-        owner: context.repo.owner,
-        repo: context.repo.repo,
-        issue_number: context.issue.number,
-        body: `${context.actor}, ${steps.verify.outputs.failed} of ${steps.verify.outputs.total} commits are unsigned.`
-      })
+- name: Gate a downstream step on verification
+  if: steps.verify.outputs.verified == 'true'
+  run: ./deploy.sh
 ```
 
 ### Org-Wide Reusable Workflow
