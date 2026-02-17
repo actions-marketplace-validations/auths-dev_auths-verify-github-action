@@ -1,71 +1,40 @@
-# Publishing to GitHub Marketplace
+# Publishing
 
-## 1. Create the dedicated repository
+## Every release
 
-```bash
-gh repo create bordumb/auths-verify-action --public --description "GitHub Action to verify commit signatures with Auths identity keys"
-git clone git@github.com:bordumb/auths-verify-action.git /tmp/auths-verify-action
+```sh
+just release 0.1.1
 ```
 
-## 2. Sync files from monorepo
+That's it. GitHub Actions handles the rest automatically.
 
-```bash
-./sync-to-dedicated-repo.sh /tmp/auths-verify-action
-```
+---
 
-## 3. Add LICENSE
+## What happens after you push the tag
 
-```bash
-cp LICENSE /tmp/auths-verify-action/LICENSE
-```
+The release workflow:
+1. Runs tests and rebuilds `dist/`
+2. Creates a GitHub Release with auto-generated notes
+3. Moves the floating `v1` tag to point at the new release
 
-(Copy the Apache-2.0 LICENSE from the auths monorepo root.)
+Users referencing `@v1` get the update immediately — no action needed.
 
-## 4. Commit and push
+---
 
-```bash
-cd /tmp/auths-verify-action
-git add -A
-git commit -m "Initial release"
-git push origin main
-```
+## First-time Marketplace listing (one-time only)
 
-## 5. Tag and release
+After the first tag is pushed and the release is created:
 
-```bash
-git tag v1.0.0
-git push origin v1.0.0
-```
+1. Go to the release on GitHub and edit it
+2. Check **"Publish this Action to the GitHub Marketplace"**
+3. Category: **Code quality** + **Security**
+4. Save
 
-The release workflow will:
-- Create a GitHub Release with auto-generated notes
-- Update the floating `v1` tag to point to `v1.0.0`
+Subsequent releases appear on the Marketplace automatically.
 
-## 6. Publish to Marketplace
+---
 
-1. Go to https://github.com/bordumb/auths-verify-action/releases
-2. Edit the `v1.0.0` release
-3. Check **"Publish this Action to the GitHub Marketplace"**
-4. Select primary category: **Code quality**
-5. Select secondary category: **Security**
-6. Save
+## Prerequisites
 
-## 7. Verify
-
-Test in any repo:
-
-```yaml
-- uses: bordumb/auths-verify-action@v1
-  with:
-    allowed-signers: '.auths/allowed_signers'
-```
-
-Check the Marketplace listing at:
-https://github.com/marketplace/actions/auths-verify-commits
-
-## Subsequent releases
-
-1. Make changes in the monorepo at `.github/actions/verify-action/`
-2. Run `npm test` and `npm run build` in the action directory
-3. Sync: `./sync-to-dedicated-repo.sh /path/to/auths-verify-action`
-4. Commit, tag (`v1.x.y`), and push — the release workflow handles the rest
+- [`just`](https://github.com/casey/just) installed (`brew install just`)
+- Push access to this repo
