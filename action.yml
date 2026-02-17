@@ -31,6 +31,14 @@ inputs:
     description: 'Whether to skip merge commits during verification'
     required: false
     default: 'true'
+  post-pr-comment:
+    description: 'Post a PR comment with verification results and fix instructions (requires pull-requests: write)'
+    required: false
+    default: 'false'
+  github-token:
+    description: 'GitHub token used to post the PR comment (required when post-pr-comment is true)'
+    required: false
+    default: ''
 
 outputs:
   verified:

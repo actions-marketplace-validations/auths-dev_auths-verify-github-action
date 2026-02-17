@@ -1,6 +1,6 @@
 {
   "name": "@auths/verify-action",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "GitHub Action to verify commit signatures using Auths identity keys",
   "main": "dist/index.js",
   "scripts": {
