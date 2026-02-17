@@ -10,6 +10,8 @@ import * as os from 'os';
 // Repository that hosts the auths CLI releases
 const CLI_RELEASE_REPO = 'bordumb/auths';
 
+export type FailureType = 'unsigned' | 'unknown_signer' | 'invalid_signature' | 'error';
+
 export interface VerificationResult {
   commit: string;
   valid: boolean;
@@ -17,6 +19,21 @@ export interface VerificationResult {
   error?: string;
   skipped?: boolean;
   skipReason?: string;
+  failureType?: FailureType;
+}
+
+/**
+ * Classify a verification error string into a structured failure type.
+ */
+export function classifyError(error: string): FailureType {
+  const e = error.toLowerCase();
+  if (e.includes('no signature') || e.includes('not signed') || e.includes('unsigned'))
+    return 'unsigned';
+  if (e.includes('not in allowed') || e.includes('unknown signer') || e.includes('no matching'))
+    return 'unknown_signer';
+  if (e.includes('invalid') || e.includes('corrupt') || e.includes('bad signature'))
+    return 'invalid_signature';
+  return 'error';
 }
 
 export interface VerifyOptions {
@@ -90,7 +107,8 @@ export async function verifyCommits(
     return commits.map(commit => ({
       commit,
       valid: false,
-      error: `Allowed signers file not found: ${allowedSignersPath}`
+      error: `Allowed signers file not found: ${allowedSignersPath}`,
+      failureType: 'error' as FailureType
     }));
   }
 
@@ -192,6 +210,9 @@ function processGpgResults(results: VerificationResult[]): VerificationResult[] 
         skipReason: 'GPG signature (not SSH)'
       };
     }
+    if (!result.valid && result.error && !result.failureType) {
+      return { ...result, failureType: classifyError(result.error) };
+    }
     return result;
   });
 }
@@ -243,10 +264,12 @@ async function verifyCommitsOneByOne(
       }
     }
 
+    const errMsg = exitCode !== 0 ? `Verification failed with exit code ${exitCode}` : undefined;
     results.push({
       commit,
       valid: exitCode === 0,
-      error: exitCode !== 0 ? `Verification failed with exit code ${exitCode}` : undefined
+      error: errMsg,
+      failureType: errMsg ? classifyError(errMsg) : undefined
     });
   }
 
