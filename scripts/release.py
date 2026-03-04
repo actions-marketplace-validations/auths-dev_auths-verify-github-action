@@ -114,6 +114,7 @@ def main() -> None:
     result = subprocess.run(
         ["git", "tag", "-a", tag, "-m", f"release: {version}"],
         cwd=REPO_ROOT,
+        env={**__import__("os").environ, "GIT_EDITOR": "true"},
     )
     if result.returncode != 0:
         print(f"\nERROR: git tag failed (exit {result.returncode})", file=sys.stderr)
@@ -130,7 +131,7 @@ def main() -> None:
 
     # Update floating major tag (e.g. v1 -> v1.0.4)
     print(f"Updating floating tag {major_tag} -> {tag}...", flush=True)
-    subprocess.run(["git", "tag", "-f", major_tag, tag], cwd=REPO_ROOT)
+    subprocess.run(["git", "tag", "-f", major_tag, f"{tag}^{{}}"], cwd=REPO_ROOT)
     result = subprocess.run(
         ["git", "push", "origin", major_tag, "--force"],
         cwd=REPO_ROOT,
