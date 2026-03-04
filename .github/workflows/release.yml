@@ -24,13 +24,36 @@ jobs:
       - run: npm run build
 
       - name: Check dist is up to date
-        run: git diff --exit-code dist/
+        run: git diff --exit-code -- dist/ ':!dist/**/*.d.ts.map'
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           generate_release_notes: true
           make_latest: true
+          body: |
+            ## Auths Verify GitHub Action
+
+            Verify commit signatures in your CI pipeline using [Auths](https://github.com/auths-dev/auths) identity keys.
+
+            ### Features
+            - Verifies SSH commit signatures against an allowed signers file or identity bundle
+            - Auto-downloads the `auths` CLI at runtime
+            - SHA256 checksum verification on downloaded binaries
+            - Supports `pull_request` and `push` events with automatic commit range detection
+            - GitHub Step Summary with per-commit verification results
+            - Optional PR comments with fix instructions for unsigned commits
+            - Skips merge commits and GPG-signed commits by default
+
+            ### Usage
+
+            ```yaml
+            - uses: auths-dev/auths-verify-github-action@v1
+              with:
+                allowed-signers: '.auths/allowed_signers'
+            ```
+
+            See the [README](https://github.com/auths-dev/auths-verify-github-action#readme) for full configuration options.
 
       - name: Update floating major tag
         run: |
