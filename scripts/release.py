@@ -105,7 +105,6 @@ def main() -> None:
 
     if not push:
         print(f"\nDry run: would create and push tag {tag}")
-        print(f"         would update floating tag {major_tag} -> {tag}")
         print("Run with --push to execute.")
         return
 
@@ -129,18 +128,9 @@ def main() -> None:
         print(f"\nERROR: git push failed (exit {result.returncode})", file=sys.stderr)
         sys.exit(1)
 
-    # Update floating major tag (e.g. v1 -> v1.0.4)
-    print(f"Updating floating tag {major_tag} -> {tag}...", flush=True)
-    subprocess.run(["git", "tag", "-f", major_tag, f"{tag}^{{}}"], cwd=REPO_ROOT)
-    result = subprocess.run(
-        ["git", "push", "origin", major_tag, "--force"],
-        cwd=REPO_ROOT,
-    )
-    if result.returncode != 0:
-        print(f"\nWARNING: Failed to push floating tag {major_tag}", file=sys.stderr)
-
     print(f"\nDone. Release workflow will run at:")
     print(f"  https://github.com/auths-dev/auths-verify-github-action/actions")
+    print(f"  (the workflow also updates the floating {major_tag} tag automatically)")
 
 
 if __name__ == "__main__":
