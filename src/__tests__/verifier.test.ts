@@ -1,4 +1,4 @@
-import { getAuthsDownloadUrl, getBinaryName, getCommitsInRange, verifyChecksum } from '../verifier';
+import { getAuthsDownloadUrl, getBinaryName, getCommitsInRange, verifyChecksum, ensureAuthsInstalled } from '../verifier';
 import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -14,8 +14,19 @@ jest.mock('os', () => {
   };
 });
 
+jest.mock('@actions/core', () => ({
+  info: jest.fn(),
+  debug: jest.fn(),
+  warning: jest.fn(),
+  getInput: jest.fn(() => ''),
+}));
+
 jest.mock('@actions/exec', () => ({
   exec: jest.fn(),
+}));
+
+jest.mock('@actions/io', () => ({
+  which: jest.fn(),
 }));
 
 jest.mock('@actions/tool-cache', () => ({
@@ -26,9 +37,17 @@ jest.mock('@actions/tool-cache', () => ({
   find: jest.fn(),
 }));
 
+jest.mock('@actions/cache', () => ({
+  restoreCache: jest.fn(),
+  saveCache: jest.fn(),
+}));
+
 const mockOs = require('os');
 const mockExec = require('@actions/exec');
 const mockTc = require('@actions/tool-cache');
+const mockCache = require('@actions/cache');
+const mockIo = require('@actions/io');
+const mockCore = require('@actions/core');
 
 describe('getAuthsDownloadUrl', () => {
   afterEach(() => {
@@ -241,5 +260,115 @@ describe('verifyChecksum', () => {
 
     // Should not throw
     await expect(verifyChecksum('https://example.com/test.tar.gz', testFile)).resolves.toBeUndefined();
+  });
+});
+
+describe('ensureAuthsInstalled - cross-run caching', () => {
+  const realTmpdir = require('os').tmpdir();
+  const cachePath = path.join(realTmpdir, 'auths-cache');
+
+  beforeEach(() => {
+    jest.resetAllMocks();
+    // Default: not in PATH, not in tool-cache
+    mockIo.which.mockResolvedValue('');
+    mockTc.find.mockReturnValue('');
+    mockOs.platform.mockReturnValue('linux');
+    mockOs.arch.mockReturnValue('x64');
+    mockOs.tmpdir.mockReturnValue(realTmpdir);
+    // Clean up cache path
+    if (fs.existsSync(cachePath)) {
+      fs.rmSync(cachePath, { recursive: true });
+    }
+  });
+
+  afterEach(() => {
+    if (fs.existsSync(cachePath)) {
+      fs.rmSync(cachePath, { recursive: true });
+    }
+  });
+
+  it('restores from cache on hit', async () => {
+    // Set up: cache restore returns a key hit with a binary on disk
+    fs.mkdirSync(cachePath, { recursive: true });
+    fs.writeFileSync(path.join(cachePath, 'auths'), 'binary-content');
+
+    mockCache.restoreCache.mockResolvedValue('auths-bin-linux-x64-abc123');
+    mockTc.cacheDir.mockResolvedValue('/tool-cache/auths/0.5.0');
+
+    const result = await ensureAuthsInstalled('0.5.0');
+
+    expect(mockCache.restoreCache).toHaveBeenCalledTimes(1);
+    expect(mockTc.cacheDir).toHaveBeenCalledWith(cachePath, 'auths', '0.5.0');
+    // Download should NOT be called
+    expect(mockTc.downloadTool).not.toHaveBeenCalled();
+    expect(result).toBe('/tool-cache/auths/0.5.0/auths');
+  });
+
+  it('downloads and saves to cache on miss', async () => {
+    const extractedDir = path.join(realTmpdir, 'auths-extracted');
+    fs.mkdirSync(extractedDir, { recursive: true });
+    fs.writeFileSync(path.join(extractedDir, 'auths'), 'binary-content');
+
+    mockCache.restoreCache.mockResolvedValue(undefined);
+    mockTc.downloadTool.mockResolvedValue('/tmp/download.tar.gz');
+    mockTc.extractTar.mockResolvedValue(extractedDir);
+    mockCache.saveCache.mockResolvedValue(1);
+    mockTc.cacheDir.mockResolvedValue('/tool-cache/auths/0.5.0');
+
+    const result = await ensureAuthsInstalled('0.5.0');
+
+    expect(mockCache.restoreCache).toHaveBeenCalledTimes(1);
+    expect(mockTc.downloadTool).toHaveBeenCalled();
+    expect(mockCache.saveCache).toHaveBeenCalledTimes(1);
+    expect(result).toBe('/tool-cache/auths/0.5.0/auths');
+
+    // Clean up
+    if (fs.existsSync(extractedDir)) {
+      fs.rmSync(extractedDir, { recursive: true });
+    }
+  });
+
+  it('continues on cache restore failure', async () => {
+    const extractedDir = path.join(realTmpdir, 'auths-extracted-err');
+    fs.mkdirSync(extractedDir, { recursive: true });
+    fs.writeFileSync(path.join(extractedDir, 'auths'), 'binary-content');
+
+    mockCache.restoreCache.mockRejectedValue(new Error('Cache service unavailable'));
+    mockTc.downloadTool.mockResolvedValue('/tmp/download.tar.gz');
+    mockTc.extractTar.mockResolvedValue(extractedDir);
+    mockCache.saveCache.mockResolvedValue(1);
+    mockTc.cacheDir.mockResolvedValue('/tool-cache/auths/0.5.0');
+
+    const result = await ensureAuthsInstalled('0.5.0');
+
+    // Should fall through to download
+    expect(mockTc.downloadTool).toHaveBeenCalled();
+    expect(result).toBe('/tool-cache/auths/0.5.0/auths');
+
+    if (fs.existsSync(extractedDir)) {
+      fs.rmSync(extractedDir, { recursive: true });
+    }
+  });
+
+  it('skips cross-run cache for latest version', async () => {
+    const extractedDir = path.join(realTmpdir, 'auths-extracted-latest');
+    fs.mkdirSync(extractedDir, { recursive: true });
+    fs.writeFileSync(path.join(extractedDir, 'auths'), 'binary-content');
+
+    mockTc.downloadTool.mockResolvedValue('/tmp/download.tar.gz');
+    mockTc.extractTar.mockResolvedValue(extractedDir);
+    mockTc.cacheDir.mockResolvedValue('/tool-cache/auths/latest');
+
+    const result = await ensureAuthsInstalled('');
+
+    // cache.restoreCache and cache.saveCache should NOT be called
+    expect(mockCache.restoreCache).not.toHaveBeenCalled();
+    expect(mockCache.saveCache).not.toHaveBeenCalled();
+    expect(mockTc.downloadTool).toHaveBeenCalled();
+    expect(result).toBe('/tool-cache/auths/latest/auths');
+
+    if (fs.existsSync(extractedDir)) {
+      fs.rmSync(extractedDir, { recursive: true });
+    }
   });
 });

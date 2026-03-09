@@ -1,3 +1,4 @@
+import * as cache from '@actions/cache';
 import * as core from '@actions/core';
 import * as exec from '@actions/exec';
 import * as io from '@actions/io';
@@ -351,16 +352,39 @@ export async function ensureAuthsInstalled(version: string): Promise<string | nu
     }
   }
 
+  // Determine download URL early (needed for cache key)
+  const downloadUrl = getAuthsDownloadUrl(version);
+  if (!downloadUrl) {
+    core.warning(`Cannot determine auths download URL for this platform (${os.platform()}/${os.arch()})`);
+    return null;
+  }
+
+  // Try cross-run cache (only for pinned versions — "latest" can change between runs)
+  const useCrossRunCache = version.length > 0;
+  const urlHash = crypto.createHash('sha256').update(downloadUrl).digest('hex').slice(0, 16);
+  const cacheKey = `auths-bin-${os.platform()}-${os.arch()}-${urlHash}`;
+  const cachePaths = [path.join(os.tmpdir(), 'auths-cache')];
+
+  if (useCrossRunCache) {
+    try {
+      const hit = await cache.restoreCache(cachePaths, cacheKey);
+      if (hit) {
+        core.info(`Restored auths from cache (key: ${cacheKey})`);
+        const restoredBinary = path.join(cachePaths[0], binaryName);
+        if (fs.existsSync(restoredBinary)) {
+          const cachedDir = await tc.cacheDir(cachePaths[0], 'auths', cacheVersion);
+          return path.join(cachedDir, binaryName);
+        }
+      }
+    } catch (e) {
+      core.debug(`Cache restore failed (non-fatal): ${e}`);
+    }
+  }
+
   // Try to download from releases
   core.info('auths CLI not found, attempting to download...');
 
   try {
-    const downloadUrl = getAuthsDownloadUrl(version);
-    if (!downloadUrl) {
-      core.warning(`Cannot determine auths download URL for this platform (${os.platform()}/${os.arch()})`);
-      return null;
-    }
-
     core.info(`Downloading auths from: ${downloadUrl}`);
     const downloadPath = await tc.downloadTool(downloadUrl);
 
@@ -385,7 +409,18 @@ export async function ensureAuthsInstalled(version: string): Promise<string | nu
         fs.chmodSync(binaryPath, '755');
       }
 
-      // Cache it with the actual version
+      // Save to cross-run cache (best-effort, don't fail the action)
+      if (useCrossRunCache) {
+        try {
+          fs.cpSync(extractedPath, cachePaths[0], { recursive: true });
+          await cache.saveCache(cachePaths, cacheKey);
+          core.info(`Saved auths to cache (key: ${cacheKey})`);
+        } catch (e) {
+          core.debug(`Cache save failed (non-fatal): ${e}`);
+        }
+      }
+
+      // Cache it with the actual version (tool-cache for same-run reuse)
       const cachedDir = await tc.cacheDir(extractedPath, 'auths', cacheVersion);
       core.info(`Cached auths at: ${cachedDir}`);
 
